@@ -1017,6 +1017,24 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
         return `${writer.label} request failed (${response.status})${details ? `: ${details.slice(0, 280)}` : ""}`;
     }
 
+    function extractPromptWriterText(value) {
+        if (typeof value === "string") return value;
+        if (Array.isArray(value)) {
+            return value.map(part => {
+                if (typeof part === "string") return part;
+                if (!part || typeof part !== "object") return "";
+                if (typeof part.text === "string") return part.text;
+                if (typeof part.content === "string") return part.content;
+                return "";
+            }).filter(Boolean).join("");
+        }
+        if (value && typeof value === "object") {
+            if (typeof value.text === "string") return value.text;
+            if (typeof value.content === "string") return value.content;
+        }
+        return "";
+    }
+
     /**
      * Direct browser call to the selected provider. Returns the generated prompt string, or
      * null when unavailable/failed (caller decides the fallback). Never throws.
@@ -1039,20 +1057,26 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
                 headers["HTTP-Referer"] = window.location.origin;
                 headers["X-OpenRouter-Title"] = "Megumin Suite";
             }
+            const payload = {
+                model: writer.model,
+                temperature: writer.temperature,
+                max_tokens: 500,
+                stream: false,
+                messages: [
+                    { role: "system", content: String(systemPrompt || "").trim() },
+                    { role: "user", content: String(userText || "").trim() }
+                ]
+            };
+            if (writer.provider === "openrouter") {
+                // Prompt writing needs final text, not an invisible reasoning trace
+                // that can consume the entire completion budget.
+                payload.reasoning = { effort: "none", exclude: true };
+            }
             const response = await fetch(writer.endpoint, {
                 method: "POST",
                 signal: controller.signal,
                 headers,
-                body: JSON.stringify({
-                    model: writer.model,
-                    temperature: writer.temperature,
-                    max_tokens: 500,
-                    stream: false,
-                    messages: [
-                        { role: "system", content: String(systemPrompt || "").trim() },
-                        { role: "user", content: String(userText || "").trim() }
-                    ]
-                })
+                body: JSON.stringify(payload)
             });
             if (!response.ok) {
                 const body = await response.text().catch(() => "");
@@ -1061,10 +1085,13 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
                 return null;
             }
             const data = await response.json();
-            const raw = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? "";
-            const text = stripUtilityThinkingWrapper(raw);
+            const choice = data?.choices?.[0] || {};
+            const raw = choice?.message?.content ?? choice?.message?.text ?? choice?.text ?? data?.output_text ?? "";
+            const visibleText = extractPromptWriterText(raw);
+            const text = stripUtilityThinkingWrapper(visibleText);
             if (text && text.trim()) return text.trim();
-            lastPromptWriterError = `${writer.label} returned no text.`;
+            const finishReason = String(choice?.finish_reason || "").trim();
+            lastPromptWriterError = `${writer.label} returned no visible text${finishReason ? ` (finish reason: ${finishReason})` : ""}.`;
             return null;
         } catch (e) {
             const reason = e?.name === "AbortError" ? "request timed out after 45 seconds" : (e?.message || String(e || "network request failed"));
