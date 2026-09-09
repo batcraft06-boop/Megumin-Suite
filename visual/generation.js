@@ -961,6 +961,7 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
     const OPENROUTER_PROMPT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
     const OPENROUTER_DEFAULT_PROMPT_MODEL = "openai/gpt-4.1-mini";
     const NANOGPT_DEFAULT_PROMPT_TEMPERATURE = 0.2;
+    let lastPromptWriterError = "";
 
     function getNanoGptGlobalSettings() {
         if (!extension_settings[extensionName]) extension_settings[extensionName] = {};
@@ -1006,23 +1007,42 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
             : getNanoGptGlobalSettings();
     }
 
+    function getPromptWriterErrorDetails(response, body, writer) {
+        let details = String(body || "").trim();
+        try {
+            const parsed = JSON.parse(details);
+            details = parsed?.error?.message || parsed?.message || parsed?.error || details;
+        } catch (_) { /* Use the plain response body. */ }
+        details = String(details || "").replace(/\s+/g, " ").trim();
+        return `${writer.label} request failed (${response.status})${details ? `: ${details.slice(0, 280)}` : ""}`;
+    }
+
     /**
      * Direct browser call to the selected provider. Returns the generated prompt string, or
      * null when unavailable/failed (caller decides the fallback). Never throws.
      */
     async function callPromptWriter(systemPrompt, userText) {
         const writer = getPromptWriterSettings();
-        if (!writer.apiKey) return null;
+        lastPromptWriterError = "";
+        if (!writer.apiKey) {
+            lastPromptWriterError = `${writer.label} API key is missing.`;
+            return null;
+        }
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 45000);
         try {
+            const headers = {
+                "Authorization": `Bearer ${writer.apiKey}`,
+                "Content-Type": "application/json"
+            };
+            if (writer.provider === "openrouter") {
+                headers["HTTP-Referer"] = window.location.origin;
+                headers["X-OpenRouter-Title"] = "Megumin Suite";
+            }
             const response = await fetch(writer.endpoint, {
                 method: "POST",
                 signal: controller.signal,
-                headers: {
-                    "Authorization": `Bearer ${writer.apiKey}`,
-                    "Content-Type": "application/json"
-                },
+                headers,
                 body: JSON.stringify({
                     model: writer.model,
                     temperature: writer.temperature,
@@ -1036,15 +1056,20 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
             });
             if (!response.ok) {
                 const body = await response.text().catch(() => "");
-                console.warn(`[Megumin Suite] ${writer.label} prompt writer HTTP ${response.status}:`, body.slice(0, 300));
+                lastPromptWriterError = getPromptWriterErrorDetails(response, body, writer);
+                console.warn(`[Megumin Suite] ${lastPromptWriterError}`);
                 return null;
             }
             const data = await response.json();
             const raw = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? "";
             const text = stripUtilityThinkingWrapper(raw);
-            return text && text.trim() ? text.trim() : null;
+            if (text && text.trim()) return text.trim();
+            lastPromptWriterError = `${writer.label} returned no text.`;
+            return null;
         } catch (e) {
-            console.warn(`[Megumin Suite] ${writer.label} prompt writer call failed:`, e?.message || e);
+            const reason = e?.name === "AbortError" ? "request timed out after 45 seconds" : (e?.message || String(e || "network request failed"));
+            lastPromptWriterError = `${writer.label} request failed: ${reason}`;
+            console.warn(`[Megumin Suite] ${lastPromptWriterError}`);
             return null;
         } finally {
             clearTimeout(timer);
@@ -4550,9 +4575,9 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
                 buildManualPromptFeedbackSystemPrompt(s),
                 `CURRENT PROMPT:\n${current}\n\nFEEDBACK:\n${feedback}`
             );
-            if (!revised) throw new Error(`${writer.label} returned an empty response.`);
+            if (!revised) throw new Error(lastPromptWriterError || `${writer.label} returned an empty response.`);
             const cleaned = stripUtilityThinkingWrapper(revised).trim();
-            if (!cleaned) throw new Error(`${writer.label} returned an empty response.`);
+            if (!cleaned) throw new Error(lastPromptWriterError || `${writer.label} returned an empty response.`);
             igSetManualPromptValue(s, cleaned, {
                 recordUndo: true,
                 toast: "Manual prompt updated from feedback."
@@ -5251,9 +5276,9 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
                 }
                 nanoPromptClientSide = true;
             } else if (promptWriter.apiKey && promptWriter.provider === "nanogpt") {
-                toastr.warning("NanoGPT direct call failed. Falling back to the in-workflow NanoGPT node (prompt will not be previewable).", "Megumin Suite");
+                toastr.warning(`${lastPromptWriterError || "NanoGPT direct call failed"}. Falling back to the in-workflow NanoGPT node (prompt will not be previewable).`, "Megumin Suite");
             } else if (promptWriter.apiKey) {
-                toastr.warning(`${promptWriter.label} direct call failed. Rendering the deterministic prompt instead.`, "Megumin Suite");
+                toastr.error(lastPromptWriterError || `${promptWriter.label} direct call failed.`, "Megumin Suite");
             } else if (!background) {
                 toastr.info(`Set your ${promptWriter.label} API key in Image Generation settings to write and preview the prompt before rendering.`, "Megumin Suite", { timeOut: 6000 });
             }
