@@ -1,0 +1,97 @@
+{
+  "8": {
+    "inputs": {
+      "samples": ["19", 0],
+      "vae": ["15", 0]
+    },
+    "class_type": "VAEDecode",
+    "_meta": { "title": "VAE Decode" }
+  },
+  "11": {
+    "inputs": {
+      "text": ["53", 0],
+      "clip": ["45", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "CLIP Text Encode (Positive Prompt)" }
+  },
+  "12": {
+    "inputs": {
+      "text": "%negative_prompt%",
+      "clip": ["45", 0]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "CLIP Text Encode (Negative Prompt)" }
+  },
+  "15": {
+    "inputs": { "vae_name": "qwen_image_vae.safetensors" },
+    "class_type": "VAELoader",
+    "_meta": { "title": "Load VAE" }
+  },
+  "19": {
+    "inputs": {
+      "seed": "%seed%",
+      "steps": "%steps%",
+      "cfg": "%scale%",
+      "sampler_name": "%sampler%",
+      "scheduler": "%scheduler%",
+      "denoise": "%denoise%",
+      "model": ["44", 0],
+      "positive": ["11", 0],
+      "negative": ["12", 0],
+      "latent_image": ["28", 0]
+    },
+    "class_type": "KSampler",
+    "_meta": { "title": "KSampler" }
+  },
+  "28": {
+    "inputs": {
+      "width": "%width%",
+      "height": "%height%",
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": { "title": "Empty Latent Image" }
+  },
+  "44": {
+    "inputs": {
+      "unet_name": "%model%",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": { "title": "Load Anima Turbo Diffusion Model" }
+  },
+  "45": {
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": { "title": "Load Qwen Text Encoder" }
+  },
+  "46": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": ["8", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": { "title": "Save Image" }
+  },
+  "53": {
+    "inputs": {
+      "ai_text": "%ai_text%",
+      "fallback_text": "%prompt%",
+      "model": "%nanogpt_model%",
+      "api_key": "%nanogpt_api_key%",
+      "endpoint": "https://nano-gpt.com/api/v1/chat/completions",
+      "system_prompt": "%nanogpt_system%",
+      "temperature": "%nanogpt_temperature%",
+      "max_tokens": 500,
+      "timeout_seconds": 120,
+      "fallback_on_error": false
+    },
+    "class_type": "MeguminNanoGPTText",
+    "_meta": { "title": "Megumin NanoGPT Text" }
+  }
+}

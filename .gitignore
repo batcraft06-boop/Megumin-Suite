@@ -1,2 +1,6 @@
-anima.json
 /Megumin-Suite-Beta
+.github/workflows/build-docker.yml
+Dockerfile
+anima_llm.json
+data-hf-images.json
+LORA_GALLERY_PLAN.md

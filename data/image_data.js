@@ -1,5 +1,6 @@
 export const KAZUMA_PLACEHOLDERS = [
         { key: '"%prompt%"', desc: "Positive Prompt (Text)" },
+        { key: '"%ai_text%"', desc: "AI Prompt Source Text (optional)" },
         { key: '"%negative_prompt%"', desc: "Negative Prompt (Text)" },
         { key: '"%seed%"', desc: "Seed (Integer)" },
         { key: '"%steps%"', desc: "Sampling Steps (Integer)" },
@@ -8,6 +9,7 @@ export const KAZUMA_PLACEHOLDERS = [
         { key: '"%clip_skip%"', desc: "CLIP Skip (Integer)" },
         { key: '"%model%"', desc: "Checkpoint Name" },
         { key: '"%sampler%"', desc: "Sampler Name" },
+        { key: '"%scheduler%"', desc: "Scheduler Name" },
         { key: '"%width%"', desc: "Image Width (px)" },
         { key: '"%height%"', desc: "Image Height (px)" },
         { key: '"%lora1%"', desc: "LoRA 1 Filename" },

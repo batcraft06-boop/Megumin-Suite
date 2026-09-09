@@ -1,0 +1,125 @@
+{
+  "8": {
+    "inputs": {
+      "samples": ["19", 0],
+      "vae": ["15", 0]
+    },
+    "class_type": "VAEDecode",
+    "_meta": { "title": "VAE Decode" }
+  },
+  "11": {
+    "inputs": {
+      "text": "%prompt%",
+      "clip": ["50", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "CLIP Text Encode (Positive Prompt)" }
+  },
+  "12": {
+    "inputs": {
+      "text": "%negative_prompt%",
+      "clip": ["50", 1]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": { "title": "CLIP Text Encode (Negative Prompt)" }
+  },
+  "15": {
+    "inputs": { "vae_name": "qwen_image_vae.safetensors" },
+    "class_type": "VAELoader",
+    "_meta": { "title": "Load VAE" }
+  },
+  "19": {
+    "inputs": {
+      "seed": "%seed%",
+      "steps": "%steps%",
+      "cfg": "%scale%",
+      "sampler_name": "%sampler%",
+      "scheduler": "%scheduler%",
+      "denoise": "%denoise%",
+      "model": ["50", 0],
+      "positive": ["11", 0],
+      "negative": ["12", 0],
+      "latent_image": ["28", 0]
+    },
+    "class_type": "KSampler",
+    "_meta": { "title": "KSampler" }
+  },
+  "28": {
+    "inputs": {
+      "width": "%width%",
+      "height": "%height%",
+      "batch_size": 1
+    },
+    "class_type": "EmptyLatentImage",
+    "_meta": { "title": "Empty Latent Image" }
+  },
+  "44": {
+    "inputs": {
+      "unet_name": "%model%",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": { "title": "Load Anima Diffusion Model" }
+  },
+  "45": {
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": { "title": "Load Qwen Text Encoder" }
+  },
+  "46": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": ["8", 0]
+    },
+    "class_type": "SaveImage",
+    "_meta": { "title": "Save Image" }
+  },
+  "47": {
+    "inputs": {
+      "lora_name": "%lora1%",
+      "strength_model": "%lorawt1%",
+      "strength_clip": "%lorawt1%",
+      "model": ["44", 0],
+      "clip": ["45", 0]
+    },
+    "class_type": "LoraLoader",
+    "_meta": { "title": "LoRA Slot 1" }
+  },
+  "48": {
+    "inputs": {
+      "lora_name": "%lora2%",
+      "strength_model": "%lorawt2%",
+      "strength_clip": "%lorawt2%",
+      "model": ["47", 0],
+      "clip": ["47", 1]
+    },
+    "class_type": "LoraLoader",
+    "_meta": { "title": "LoRA Slot 2" }
+  },
+  "49": {
+    "inputs": {
+      "lora_name": "%lora3%",
+      "strength_model": "%lorawt3%",
+      "strength_clip": "%lorawt3%",
+      "model": ["48", 0],
+      "clip": ["48", 1]
+    },
+    "class_type": "LoraLoader",
+    "_meta": { "title": "LoRA Slot 3" }
+  },
+  "50": {
+    "inputs": {
+      "lora_name": "%lora4%",
+      "strength_model": "%lorawt4%",
+      "strength_clip": "%lorawt4%",
+      "model": ["49", 0],
+      "clip": ["49", 1]
+    },
+    "class_type": "LoraLoader",
+    "_meta": { "title": "LoRA Slot 4" }
+  }
+}

@@ -6,6 +6,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "KazumaONIISAN",
-  "version": "6.0.0",
+  "version": "1.1.0",
+  "generate_interceptor": "megumin_memory_intercept",
   "homePage": ""
 }
