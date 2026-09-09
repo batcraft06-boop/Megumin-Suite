@@ -806,6 +806,10 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
     const RUNPOD_KREA_MODEL = "krea2_turbo_fp8_scaled.safetensors";
     const RUNPOD_ANIMA_MODELS = [RUNPOD_ANIMA_MODEL, RUNPOD_ANIMA_BASE_MODEL];
     const RUNPOD_IMAGE_MODELS = [...RUNPOD_ANIMA_MODELS, RUNPOD_KREA_MODEL];
+    const RUNPOD_SLOT_DEFINITIONS = {
+        krea2: { label: "Krea 2", model: RUNPOD_KREA_MODEL, promptStyle: "krea2" },
+        anima: { label: "Anima", model: RUNPOD_ANIMA_MODEL, promptStyle: "standard" }
+    };
     // Stock ComfyUI KSampler sampler/scheduler names (base install). RunPod
     // Image Gen cannot query the worker at dropdown time, so keep these explicit.
     const RUNPOD_IMAGE_SAMPLERS = [
@@ -863,19 +867,63 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
             extension_settings[extensionName].runpod = { endpointId: "", apiKey: "" };
         }
         const runpod = extension_settings[extensionName].runpod;
-        if (runpod.endpointId === undefined) runpod.endpointId = "";
-        if (runpod.apiKey === undefined) runpod.apiKey = "";
-        runpod.endpointId = String(runpod.endpointId || "").trim();
-        runpod.apiKey = String(runpod.apiKey || "").trim();
+        const legacyEndpointId = String(runpod.endpointId || "").trim();
+        const legacyApiKey = String(runpod.apiKey || "").trim();
+        if (!runpod.slots || typeof runpod.slots !== "object" || Array.isArray(runpod.slots)) {
+            // Preserve the existing single-endpoint setup as the Krea 2 slot.
+            runpod.slots = {
+                krea2: { endpointId: legacyEndpointId, apiKey: legacyApiKey },
+                anima: { endpointId: "", apiKey: "" }
+            };
+        }
+        Object.keys(RUNPOD_SLOT_DEFINITIONS).forEach(slotId => {
+            const slot = runpod.slots[slotId];
+            if (!slot || typeof slot !== "object" || Array.isArray(slot)) runpod.slots[slotId] = {};
+            runpod.slots[slotId].endpointId = String(runpod.slots[slotId].endpointId || "").trim();
+            runpod.slots[slotId].apiKey = String(runpod.slots[slotId].apiKey || "").trim();
+        });
+        if (!RUNPOD_SLOT_DEFINITIONS[runpod.activeSlot]) runpod.activeSlot = "krea2";
+        const activeSlot = runpod.slots[runpod.activeSlot];
+        // Keep these legacy mirrors so existing profile code and saved settings
+        // continue to use whichever slot is active.
+        runpod.endpointId = activeSlot.endpointId;
+        runpod.apiKey = activeSlot.apiKey;
         return runpod;
+    }
+
+    function getRunpodActiveSlotSettings() {
+        const runpod = getRunpodGlobalSettings();
+        return runpod.slots[runpod.activeSlot];
+    }
+
+    function selectRunpodSlot(s, slotId) {
+        if (!RUNPOD_SLOT_DEFINITIONS[slotId]) return null;
+        const runpod = getRunpodGlobalSettings();
+        runpod.activeSlot = slotId;
+        const slot = getRunpodActiveSlotSettings();
+        runpod.endpointId = slot.endpointId;
+        runpod.apiKey = slot.apiKey;
+        if (s?.runpod) {
+            s.runpod.endpointId = slot.endpointId;
+            s.runpod.apiKey = slot.apiKey;
+        }
+        if (s && s.selectedModel !== RUNPOD_SLOT_DEFINITIONS[slotId].model) {
+            s.selectedModel = RUNPOD_SLOT_DEFINITIONS[slotId].model;
+        }
+        if (s && s.promptStyle !== RUNPOD_SLOT_DEFINITIONS[slotId].promptStyle) {
+            s.promptStyle = RUNPOD_SLOT_DEFINITIONS[slotId].promptStyle;
+        }
+        return slot;
     }
 
     function ensureRunpodSettings(s) {
         if (!s) return RUNPOD_IMAGE_DEFAULTS;
         if (!s.runpod || typeof s.runpod !== "object") s.runpod = {};
-        const globalRunpod = getRunpodGlobalSettings();
-        if (!globalRunpod.endpointId && s.runpod.endpointId) globalRunpod.endpointId = String(s.runpod.endpointId || "").trim();
-        if (!globalRunpod.apiKey && s.runpod.apiKey) globalRunpod.apiKey = String(s.runpod.apiKey || "").trim();
+        let globalRunpod = getRunpodGlobalSettings();
+        const activeSlot = getRunpodActiveSlotSettings();
+        if (!activeSlot.endpointId && s.runpod.endpointId) activeSlot.endpointId = String(s.runpod.endpointId || "").trim();
+        if (!activeSlot.apiKey && s.runpod.apiKey) activeSlot.apiKey = String(s.runpod.apiKey || "").trim();
+        globalRunpod = getRunpodGlobalSettings();
         Object.keys(RUNPOD_IMAGE_DEFAULTS).forEach(key => {
             if (s.runpod[key] === undefined) s.runpod[key] = RUNPOD_IMAGE_DEFAULTS[key];
         });
@@ -894,7 +942,7 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
     }
 
     // -------------------------------------------------------------
-    // NANOGPT PROMPT WRITER (client-side)
+    // PROMPT WRITER (client-side)
     // -------------------------------------------------------------
     // The image prompt is generated HERE, in the browser, before any render
     // job is submitted. This is deliberate:
@@ -910,6 +958,8 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
     // the direct call is unavailable (no key, CORS, network error).
     const NANOGPT_PROMPT_ENDPOINT = "https://nano-gpt.com/api/v1/chat/completions";
     const NANOGPT_DEFAULT_PROMPT_MODEL = "zai-org/glm-5";
+    const OPENROUTER_PROMPT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+    const OPENROUTER_DEFAULT_PROMPT_MODEL = "openai/gpt-4.1-mini";
     const NANOGPT_DEFAULT_PROMPT_TEMPERATURE = 0.2;
 
     function getNanoGptGlobalSettings() {
@@ -925,26 +975,57 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
         return nano;
     }
 
+    function getOpenRouterGlobalSettings() {
+        if (!extension_settings[extensionName]) extension_settings[extensionName] = {};
+        if (!extension_settings[extensionName].openrouter || typeof extension_settings[extensionName].openrouter !== "object") {
+            extension_settings[extensionName].openrouter = { apiKey: "", model: OPENROUTER_DEFAULT_PROMPT_MODEL, temperature: NANOGPT_DEFAULT_PROMPT_TEMPERATURE };
+        }
+        const openrouter = extension_settings[extensionName].openrouter;
+        openrouter.apiKey = String(openrouter.apiKey || "").trim();
+        openrouter.model = String(openrouter.model || "").trim() || OPENROUTER_DEFAULT_PROMPT_MODEL;
+        const temp = parseFloat(openrouter.temperature);
+        openrouter.temperature = Number.isFinite(temp) ? Math.max(0, Math.min(2, temp)) : NANOGPT_DEFAULT_PROMPT_TEMPERATURE;
+        return openrouter;
+    }
+
+    function getPromptWriterSettings() {
+        if (!extension_settings[extensionName]) extension_settings[extensionName] = {};
+        const provider = extension_settings[extensionName].promptWriterProvider === "openrouter" ? "openrouter" : "nanogpt";
+        const config = provider === "openrouter" ? getOpenRouterGlobalSettings() : getNanoGptGlobalSettings();
+        return {
+            provider,
+            label: provider === "openrouter" ? "OpenRouter" : "NanoGPT",
+            endpoint: provider === "openrouter" ? OPENROUTER_PROMPT_ENDPOINT : NANOGPT_PROMPT_ENDPOINT,
+            ...config
+        };
+    }
+
+    function getActivePromptWriterConfig() {
+        return getPromptWriterSettings().provider === "openrouter"
+            ? getOpenRouterGlobalSettings()
+            : getNanoGptGlobalSettings();
+    }
+
     /**
-     * Direct browser call to NanoGPT. Returns the generated prompt string, or
+     * Direct browser call to the selected provider. Returns the generated prompt string, or
      * null when unavailable/failed (caller decides the fallback). Never throws.
      */
-    async function callNanoGptPromptWriter(systemPrompt, userText) {
-        const nano = getNanoGptGlobalSettings();
-        if (!nano.apiKey) return null;
+    async function callPromptWriter(systemPrompt, userText) {
+        const writer = getPromptWriterSettings();
+        if (!writer.apiKey) return null;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 45000);
         try {
-            const response = await fetch(NANOGPT_PROMPT_ENDPOINT, {
+            const response = await fetch(writer.endpoint, {
                 method: "POST",
                 signal: controller.signal,
                 headers: {
-                    "Authorization": `Bearer ${nano.apiKey}`,
+                    "Authorization": `Bearer ${writer.apiKey}`,
                     "Content-Type": "application/json"
                 },
                 body: JSON.stringify({
-                    model: nano.model,
-                    temperature: nano.temperature,
+                    model: writer.model,
+                    temperature: writer.temperature,
                     max_tokens: 500,
                     stream: false,
                     messages: [
@@ -955,7 +1036,7 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
             });
             if (!response.ok) {
                 const body = await response.text().catch(() => "");
-                console.warn(`[Megumin Suite] NanoGPT prompt writer HTTP ${response.status}:`, body.slice(0, 300));
+                console.warn(`[Megumin Suite] ${writer.label} prompt writer HTTP ${response.status}:`, body.slice(0, 300));
                 return null;
             }
             const data = await response.json();
@@ -963,7 +1044,7 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
             const text = stripUtilityThinkingWrapper(raw);
             return text && text.trim() ? text.trim() : null;
         } catch (e) {
-            console.warn("[Megumin Suite] NanoGPT prompt writer call failed:", e?.message || e);
+            console.warn(`[Megumin Suite] ${writer.label} prompt writer call failed:`, e?.message || e);
             return null;
         } finally {
             clearTimeout(timer);
@@ -1258,6 +1339,8 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
         const s = getLocalProfile().imageGen;
         ensureImageGenLoraArrays(s);
         const runpod = ensureRunpodSettings(s);
+        const runpodGlobal = getRunpodGlobalSettings();
+        const promptWriter = getPromptWriterSettings();
         if (s.standardBooruLeadTags === undefined) s.standardBooruLeadTags = "";
         if (s.loraTriggers === undefined) s.loraTriggers = "";
         if (s.promptExtra === undefined) s.promptExtra = "";
@@ -1321,22 +1404,29 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
                     </div>
                 </div>
 
-                <!-- NanoGPT prompt writer (client-side) -->
-                <div data-ig-collapse="nanogpt-writer" style="background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
-                    <div class="ps-rule-title" style="margin-bottom: 12px;"><i class="fa-solid fa-feather-pointed"></i> NanoGPT Prompt Writer</div>
-                    <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 12px;">Writes the final image prompt in your browser before the render job is sent, so you can always see and edit the exact prompt that renders. Used by the ComfyUI NanoGPT quick-image mode and background jobs. Without a key here, prompt writing falls back to the NanoGPT node inside the ComfyUI workflow (invisible on RunPod).</div>
-                    <div style="display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 0.55fr); gap: 12px;">
+                <!-- Prompt writer (client-side) -->
+                <div data-ig-collapse="prompt-writer" style="background: var(--bg-panel); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+                    <div class="ps-rule-title" style="margin-bottom: 12px;"><i class="fa-solid fa-feather-pointed"></i> Prompt Writer</div>
+                    <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 12px;">Writes the final image prompt in your browser before the render job is sent, so you can always see and edit the exact prompt that renders.</div>
+                    <div style="display: grid; grid-template-columns: minmax(130px, 0.7fr) minmax(0, 1.35fr) minmax(0, 1fr) minmax(90px, 0.55fr); gap: 12px;">
                         <div>
-                            <div style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); margin-bottom: 4px;">NanoGPT API Key</div>
-                            <input type="password" id="ig_nanogpt_key" class="ps-modern-input" value="${psEscapeAttr(getNanoGptGlobalSettings().apiKey)}" placeholder="nano-gpt.com API key" autocomplete="off" style="padding: 8px; font-size: 0.8rem;" />
+                            <div style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); margin-bottom: 4px;">Provider</div>
+                            <select id="ig_prompt_writer_provider" class="ps-modern-input" style="padding: 8px; font-size: 0.8rem; cursor: pointer;">
+                                <option value="nanogpt" ${promptWriter.provider === "nanogpt" ? "selected" : ""}>NanoGPT</option>
+                                <option value="openrouter" ${promptWriter.provider === "openrouter" ? "selected" : ""}>OpenRouter</option>
+                            </select>
+                        </div>
+                        <div>
+                            <div style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); margin-bottom: 4px;">${promptWriter.label} API Key</div>
+                            <input type="password" id="ig_prompt_writer_key" class="ps-modern-input" value="${psEscapeAttr(promptWriter.apiKey)}" placeholder="${promptWriter.provider === "openrouter" ? "OpenRouter API key" : "nano-gpt.com API key"}" autocomplete="off" style="padding: 8px; font-size: 0.8rem;" />
                         </div>
                         <div>
                             <div style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); margin-bottom: 4px;">Model</div>
-                            <input type="text" id="ig_nanogpt_model" class="ps-modern-input" value="${psEscapeAttr(getNanoGptGlobalSettings().model)}" placeholder="${psEscapeAttr(NANOGPT_DEFAULT_PROMPT_MODEL)}" autocomplete="off" style="padding: 8px; font-size: 0.8rem;" />
+                            <input type="text" id="ig_prompt_writer_model" class="ps-modern-input" value="${psEscapeAttr(promptWriter.model)}" placeholder="${psEscapeAttr(promptWriter.provider === "openrouter" ? OPENROUTER_DEFAULT_PROMPT_MODEL : NANOGPT_DEFAULT_PROMPT_MODEL)}" autocomplete="off" style="padding: 8px; font-size: 0.8rem;" />
                         </div>
                         <div>
                             <div style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); margin-bottom: 4px;" title="0 = deterministic, 2 = wild. Low values keep the prompt faithful to the scene.">Temp</div>
-                            <input type="number" id="ig_nanogpt_temp" class="ps-modern-input" value="${psEscapeAttr(getNanoGptGlobalSettings().temperature)}" min="0" max="2" step="0.05" style="padding: 8px; font-size: 0.8rem; text-align: center;" />
+                            <input type="number" id="ig_prompt_writer_temp" class="ps-modern-input" value="${psEscapeAttr(promptWriter.temperature)}" min="0" max="2" step="0.05" style="padding: 8px; font-size: 0.8rem; text-align: center;" />
                         </div>
                     </div>
                 </div>
@@ -1370,9 +1460,12 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
                         <div class="ps-switch"></div>
                     </div>
                     <div id="ig_runpod_settings" style="display: ${runpod.enabled ? 'block' : 'none'};">
+                        <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+                            ${Object.entries(RUNPOD_SLOT_DEFINITIONS).map(([slotId, slot]) => `<button type="button" class="ps-modern-btn secondary ig-runpod-slot" data-slot="${slotId}" title="Use the ${slot.label} RunPod worker" style="padding:7px 11px; font-size:.75rem; ${runpodGlobal.activeSlot === slotId ? 'border-color:var(--gold); color:var(--gold);' : ''}"><i class="fa-solid ${slotId === 'krea2' ? 'fa-camera' : 'fa-wand-magic-sparkles'}"></i> ${slot.label}</button>`).join("")}
+                        </div>
                         <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 12px; margin-bottom: 12px;">
                             <div>
-                                <div style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); margin-bottom: 4px;">Endpoint ID</div>
+                                <div style="font-size: 0.7rem; font-weight: bold; color: var(--text-muted); margin-bottom: 4px;">${RUNPOD_SLOT_DEFINITIONS[runpodGlobal.activeSlot].label} Endpoint ID</div>
                                 <input type="text" id="ig_runpod_endpoint" class="ps-modern-input" value="${psEscapeAttr(runpod.endpointId)}" placeholder="your-endpoint-id" style="padding: 8px; font-size: 0.8rem;" />
                             </div>
                             <div>
@@ -1857,15 +1950,27 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
                 igFetchComfyLists();
             } else igFetchComfyLists();
         });
+        $(".ig-runpod-slot").on("click", function() {
+            const slotId = String($(this).attr("data-slot") || "");
+            const slot = selectRunpodSlot(s, slotId);
+            if (!slot) return;
+            saveProfileToMemory();
+            renderImageGen(c);
+            if (runpod.enabled) igFetchComfyLists();
+        });
         $("#ig_runpod_endpoint").on("input", (e) => {
             const value = $(e.target).val().trim();
-            getRunpodGlobalSettings().endpointId = value;
+            const globalRunpod = getRunpodGlobalSettings();
+            globalRunpod.slots[globalRunpod.activeSlot].endpointId = value;
+            globalRunpod.endpointId = value;
             ensureRunpodSettings(s).endpointId = value;
             saveProfileToMemory();
         });
         $("#ig_runpod_key").on("input", (e) => {
             const value = $(e.target).val().trim();
-            getRunpodGlobalSettings().apiKey = value;
+            const globalRunpod = getRunpodGlobalSettings();
+            globalRunpod.slots[globalRunpod.activeSlot].apiKey = value;
+            globalRunpod.apiKey = value;
             ensureRunpodSettings(s).apiKey = value;
             saveProfileToMemory();
         });
@@ -1879,17 +1984,23 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
             rp.timeoutMs = Math.max(30000, parseInt($(e.target).val(), 10) || RUNPOD_IMAGE_DEFAULTS.timeoutMs);
             saveProfileToMemory();
         });
-        $("#ig_nanogpt_key").on("input", (e) => {
-            getNanoGptGlobalSettings().apiKey = String($(e.target).val() || "").trim();
+        $("#ig_prompt_writer_provider").on("change", (e) => {
+            extension_settings[extensionName].promptWriterProvider = $(e.target).val() === "openrouter" ? "openrouter" : "nanogpt";
+            saveProfileToMemory();
+            renderImageGen(c);
+        });
+        $("#ig_prompt_writer_key").on("input", (e) => {
+            getActivePromptWriterConfig().apiKey = String($(e.target).val() || "").trim();
             saveProfileToMemory();
         });
-        $("#ig_nanogpt_model").on("input", (e) => {
-            getNanoGptGlobalSettings().model = String($(e.target).val() || "").trim() || NANOGPT_DEFAULT_PROMPT_MODEL;
+        $("#ig_prompt_writer_model").on("input", (e) => {
+            const defaultModel = getPromptWriterSettings().provider === "openrouter" ? OPENROUTER_DEFAULT_PROMPT_MODEL : NANOGPT_DEFAULT_PROMPT_MODEL;
+            getActivePromptWriterConfig().model = String($(e.target).val() || "").trim() || defaultModel;
             saveProfileToMemory();
         });
-        $("#ig_nanogpt_temp").on("input", (e) => {
+        $("#ig_prompt_writer_temp").on("input", (e) => {
             const value = parseFloat($(e.target).val());
-            getNanoGptGlobalSettings().temperature = Number.isFinite(value) ? Math.max(0, Math.min(2, value)) : NANOGPT_DEFAULT_PROMPT_TEMPERATURE;
+            getActivePromptWriterConfig().temperature = Number.isFinite(value) ? Math.max(0, Math.min(2, value)) : NANOGPT_DEFAULT_PROMPT_TEMPERATURE;
             saveProfileToMemory();
         });
         $("#ig_style").on("change", (e) => { s.promptStyle = $(e.target).val(); saveProfileToMemory(); renderImageGen(c); });
@@ -4426,8 +4537,8 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
         const feedback = String($("#ig_manual_prompt_feedback").val() || s.manualPromptFeedback || "").trim();
         if (!current) return toastr.warning("Manual prompt is empty. Paste or load a prompt first.");
         if (!feedback) return toastr.warning("Add feedback first, then regenerate.");
-        const nano = getNanoGptGlobalSettings();
-        if (!nano.apiKey) return toastr.warning("Add a NanoGPT API key in the NanoGPT Prompt Writer card first.");
+        const writer = getPromptWriterSettings();
+        if (!writer.apiKey) return toastr.warning(`Add a ${writer.label} API key in the Prompt Writer card first.`);
 
         s.manualPromptFeedback = feedback;
         saveProfileToMemory();
@@ -4435,13 +4546,13 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
         const originalHtml = $btn?.length ? $btn.html() : "";
         if ($btn?.length) $btn.prop("disabled", true).html('<i class="fa-solid fa-spinner fa-spin"></i> Rewriting...');
         try {
-            const revised = await callNanoGptPromptWriter(
+            const revised = await callPromptWriter(
                 buildManualPromptFeedbackSystemPrompt(s),
                 `CURRENT PROMPT:\n${current}\n\nFEEDBACK:\n${feedback}`
             );
-            if (!revised) throw new Error("NanoGPT returned an empty response.");
+            if (!revised) throw new Error(`${writer.label} returned an empty response.`);
             const cleaned = stripUtilityThinkingWrapper(revised).trim();
-            if (!cleaned) throw new Error("NanoGPT returned an empty response.");
+            if (!cleaned) throw new Error(`${writer.label} returned an empty response.`);
             igSetManualPromptValue(s, cleaned, {
                 recordUndo: true,
                 toast: "Manual prompt updated from feedback."
@@ -5118,10 +5229,11 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
         const nanoSystemPrompt = String(opts?.nanoSystemPrompt || "").trim() || buildNanoImageSystemPrompt(s);
         const wantsNanoPrompt = !!opts?.requireAiTextWorkflow
             || (background && !!String(opts?.aiText || "").trim() && String(opts?.aiText || "").trim() !== finalPrompt);
+        const promptWriter = getPromptWriterSettings();
         let nanoPromptClientSide = false;
         if (wantsNanoPrompt) {
             if (!background) showKazumaProgress("Writing Image Prompt...");
-            const generated = await callNanoGptPromptWriter(nanoSystemPrompt, aiText);
+            const generated = await callPromptWriter(nanoSystemPrompt, aiText);
             if (generated) {
                 if (s.promptStyle === "krea2" && blockForbiddenKrea2Prompt(generated)) return;
                 finalPrompt = sanitizePromptTags(generated);
@@ -5138,10 +5250,12 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
                     finalPrompt = ensureImageLeadPrefix(finalPrompt);
                 }
                 nanoPromptClientSide = true;
-            } else if (getNanoGptGlobalSettings().apiKey) {
+            } else if (promptWriter.apiKey && promptWriter.provider === "nanogpt") {
                 toastr.warning("NanoGPT direct call failed. Falling back to the in-workflow NanoGPT node (prompt will not be previewable).", "Megumin Suite");
+            } else if (promptWriter.apiKey) {
+                toastr.warning(`${promptWriter.label} direct call failed. Rendering the deterministic prompt instead.`, "Megumin Suite");
             } else if (!background) {
-                toastr.info("Set your NanoGPT API key in Image Generation settings to write and preview the prompt before rendering.", "Megumin Suite", { timeOut: 6000 });
+                toastr.info(`Set your ${promptWriter.label} API key in Image Generation settings to write and preview the prompt before rendering.`, "Megumin Suite", { timeOut: 6000 });
             }
         }
 
@@ -5149,7 +5263,7 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
         if (s.previewPrompt && !background) {
             $("#kazuma_progress_overlay").hide(); // Hide the progress bar temporarily
 
-            const isWorkflowAiPrompt = !!opts?.requireAiTextWorkflow && !nanoPromptClientSide;
+            const isWorkflowAiPrompt = !!opts?.requireAiTextWorkflow && !nanoPromptClientSide && promptWriter.provider === "nanogpt";
             const $content = isWorkflowAiPrompt
                 ? $(`
                     <div style="display:flex; flex-direction:column; gap:10px; font-family:'Inter',sans-serif;">
@@ -5207,9 +5321,10 @@ For a spatially complex explicit scene, keep the prompt in prose but include a f
         // in-workflow NanoGPT node entirely: the worker must not re-run (and
         // possibly rewrite) the prompt the user just saw/approved, and
         // skipping it saves billed GPU seconds.
-        if (opts?.preserveStoredPrompt || nanoPromptClientSide) igBypassNanoTextNodesForStoredPrompt(workflow);
+        const bypassInWorkflowNano = promptWriter.provider === "openrouter" && wantsNanoPrompt;
+        if (opts?.preserveStoredPrompt || nanoPromptClientSide || bypassInWorkflowNano) igBypassNanoTextNodesForStoredPrompt(workflow);
         const workflowHasAiText = igWorkflowContainsPlaceholder(workflow, "%ai_text%");
-        if (opts?.requireAiTextWorkflow && !nanoPromptClientSide && !workflowHasAiText) {
+        if (opts?.requireAiTextWorkflow && !nanoPromptClientSide && !bypassInWorkflowNano && !workflowHasAiText) {
             $("#kazuma_progress_overlay").hide();
             throw new Error(`The selected workflow "${s.currentWorkflowName}" has no %ai_text% input. Select anima_nanogpt.json (or a NanoGPT workflow) or switch quick-image source away from ComfyUI NanoGPT.`);
         }
